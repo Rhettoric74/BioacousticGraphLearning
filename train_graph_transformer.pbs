@@ -1,0 +1,48 @@
+#!/bin/bash
+
+#PBS -P personal-e1583377
+#PBS -j oe
+#PBS -N graph_transformer_vitb
+#PBS -q auto_free
+#PBS -l select=1:ncpus=4:ngpus=1:mem=240GB
+#PBS -l walltime=12:00:00
+
+set -euo pipefail
+cd "$PBS_O_WORKDIR"
+
+image="/app1/common/singularity-img/hopper/cuda/cuda_12.1.1-cudnn8-devel-ubuntu22.04.sif"
+module load singularity
+
+# Update this path to the directory produced by build_xc_knn_graph.py.
+graph_dir="/scratch/e1583377/deduplicated_xc_graph_k_equals_15"
+
+# The host environment used by the existing graph-construction job.
+torch_packages="/home/svu/e1583377/hopper_pypkg/cuda/cuda_12.1.1-cudnn8-devel-ubuntu22.04/local/lib/python3.10/dist-packages"
+
+singularity exec --nv -e "$image" bash <<EOF > "stdout.$PBS_JOBID" 2> "stderr.$PBS_JOBID"
+set -euo pipefail
+export PYTHONPATH="$PYTHONPATH:$torch_packages:$PBS_O_WORKDIR/scripts"
+cd "$PBS_O_WORKDIR"
+
+# ViT-B-scale configuration:
+#   d_model=768, 12 layers, 12 attention heads, FFN width=3072.
+# Audio embeddings are projected from their stored dimension (e.g. 1536)
+# into the 768-dimensional transformer space by the model.
+#
+# This first run is the clean species-classification baseline. Set the two
+# auxiliary weights to nonzero values after confirming this run works.
+python3.10 scripts/train_graph_transformer.py "$graph_dir" \\
+    --device cuda \\
+    --d-model 768 \\
+    --layers 12 \\
+    --heads 12 \\
+    --epochs 20 \\
+    --walks 100000 \\
+    --walk-length 8 \\
+    --batch-size 16 \\
+    --lr 3e-4 \\
+    --p 1.0 \\
+    --q 1.0 \\
+    --location-weight 0.0 \\
+    --audio-weight 0.0
+EOF

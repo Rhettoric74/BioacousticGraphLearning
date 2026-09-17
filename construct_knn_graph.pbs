@@ -1,0 +1,20 @@
+#!/bin/bash
+
+#PBS -P personal-e1583377
+#PBS -j oe
+#PBS -N pytorch
+
+#PBS -q auto_free
+#PBS -l select=1:ncpus=1:ngpus=1:mem=240GB
+#PBS -l walltime=02:00:00
+cd $PBS_O_WORKDIR;
+image="/app1/common/singularity-img/hopper/cuda/cuda_12.1.1-cudnn8-devel-ubuntu22.04.sif"
+module load singularity
+singularity exec -e $image bash << EOF > stdout.$PBS_JOBID 2> stderr.$PBS_JOBID
+export PYTHONPATH=$PYTHONPATH:/home/svu/e1583377/hopper_pypkg/cuda/cuda_12.1.1-cudnn8-devel-ubuntu22.04/local/lib/python3.10/dist-packages
+# Run your scripts
+cd scripts
+python3.10 build_xc_knn_graph.py \
+    /scratch/e1583377/pickled_audio_embeds_3_random_windows_corrected \
+    /scratch/e1583377/deduplicated_xc_graph_k_equals_15 \
+    --k 15

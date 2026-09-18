@@ -15,13 +15,16 @@ module load singularity
 
 # Update this path to the directory produced by build_xc_knn_graph.py.
 graph_dir="/scratch/e1583377/deduplicated_xc_graph_k_equals_15"
+birdset_dir="/scratch/e1583377/pickled_birdset_embeds"
+perch_label_mapping="/home/svu/e1583377/Spatial_Perch_Transfer_Learning/assets/perch_v2_label_mapping.json"
+checkpoint_dir="/scratch/e1583377/graph_transformer_checkpoints_vitb"
 
 # The host environment used by the existing graph-construction job.
 torch_packages="/home/svu/e1583377/hopper_pypkg/cuda/cuda_12.1.1-cudnn8-devel-ubuntu22.04/local/lib/python3.10/dist-packages"
 
 singularity exec --nv -e "$image" bash <<EOF > "stdout.$PBS_JOBID" 2> "stderr.$PBS_JOBID"
 set -euo pipefail
-export PYTHONPATH="$PYTHONPATH:$torch_packages:$PBS_O_WORKDIR/scripts"
+export PYTHONPATH="\${PYTHONPATH:-}:$torch_packages:$PBS_O_WORKDIR/scripts:/home/svu/e1583377/Spatial_Perch_Transfer_Learning"
 cd "$PBS_O_WORKDIR"
 
 # ViT-B-scale configuration:
@@ -31,18 +34,23 @@ cd "$PBS_O_WORKDIR"
 #
 # This first run is the clean species-classification baseline. Set the two
 # auxiliary weights to nonzero values after confirming this run works.
-python3.10 scripts/train_graph_transformer.py "$graph_dir" \\
-    --device cuda \\
-    --d-model 768 \\
-    --layers 12 \\
-    --heads 12 \\
-    --epochs 20 \\
-    --walks 100000 \\
-    --walk-length 8 \\
-    --batch-size 16 \\
-    --lr 3e-4 \\
-    --p 1.0 \\
-    --q 1.0 \\
-    --location-weight 0.0 \\
-    --audio-weight 0.0
+python3.10 scripts/train_graph_transformer.py "$graph_dir" \
+    --device cuda \
+    --d-model 768 \
+    --layers 12 \
+    --heads 12 \
+    --epochs 20 \
+    --walks 100000 \
+    --walk-length 8 \
+    --batch-size 16 \
+    --lr 3e-4 \
+    --p 1.0 \
+    --q 1.0 \
+    --location-weight 0.0 \
+    --audio-weight 0.0 \
+    --birdset-dir "$birdset_dir" \
+    --perch-label-mapping "$perch_label_mapping" \
+    --checkpoint-dir "$checkpoint_dir" \
+    --top-k 3 \
+    --sphere-scales 8
 EOF

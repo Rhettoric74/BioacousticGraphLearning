@@ -4,7 +4,7 @@ import pickle
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, average_precision_score, accuracy_score
 from .location import Sphere2VecSphereM
 
 
@@ -58,4 +58,7 @@ def evaluate_birdset(model, loader, device="cuda"):
         if labels[:, c].min() == labels[:, c].max(): continue
         per_class.append(roc_auc_score(labels[:, c], probabilities[:, c]))
     return {"macro_auroc": float(np.mean(per_class)) if per_class else float("nan"),
+            "cmAP": float(np.mean([average_precision_score(labels[:, c], probabilities[:, c])
+                                    for c in range(labels.shape[1]) if labels[:, c].max() > labels[:, c].min()])) if any(labels[:, c].max() > labels[:, c].min() for c in range(labels.shape[1])) else float("nan"),
+            "top1": float(labels[np.arange(len(labels)), probabilities.argmax(1)].mean()),
             "n_valid_classes": len(per_class), "n_samples": len(labels)}

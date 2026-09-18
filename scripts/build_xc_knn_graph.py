@@ -183,10 +183,42 @@ def build_graph(coords: np.ndarray, k: int, include_self: bool):
     return row.astype(np.int64), col.astype(np.int64), km.astype(np.float32)
 
 
+def load_mixup_nodes(input_dir: Path, num_classes: int):
+    """Load the pickle layout in load_mixup_embeddings and make graph nodes."""
+    audio, coords, targets = [], [], []
+    for path in sorted(input_dir.glob('*.pkl')):
+        with path.open('rb') as f: batch = pickle.load(f)
+        if 'audio_embeddings' not in batch or 'labels_sparse' not in batch: continue
+        a = as_numpy(batch['audio_embeddings'])
+        contexts = batch.get('component_contexts')
+        if contexts is None and 'component_contexts_flat' in batch:
+            # The compact representation is reconstructed inline.
+            flat, lengths, shapes = batch['component_contexts_flat'], batch['component_contexts_lengths'], batch['component_contexts_shapes']
+            contexts, pos = [], 0
+            for length, shape in zip(lengths, shapes):
+                row = []
+                for _ in range(length):
+                    size = int(np.prod(shape)); row.append(flat[pos:pos+size].reshape(shape)); pos += size
+                contexts.append(row)
+        if contexts is None: continue
+        for i, labels in enumerate(batch['labels_sparse']):
+            if i >= len(a) or not np.isfinite(a[i]).all() or not contexts[i]: continue
+            c = np.asarray([np.asarray(x).reshape(-1)[:2] for x in contexts[i]], dtype=np.float32)
+            if not np.isfinite(c).all(): continue
+            y = np.zeros(num_classes, dtype=np.float32)
+            for label in np.asarray(labels).reshape(-1):
+                if 0 <= int(label) < num_classes: y[int(label)] = 1.0
+            audio.append(a[i].astype(np.float32)); coords.append(c.mean(0)); targets.append(y)
+    if not audio: return None
+    return np.stack(audio), np.stack(coords), np.stack(targets)
+
+
 def main():
     p = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument("input_dir", type=Path)
     p.add_argument("output_dir", type=Path)
+    p.add_argument("--mixup-dir", type=Path, default=None)
+    p.add_argument("--num-classes", type=int, default=None)
     p.add_argument("--k", type=int, default=15, help="Number of outgoing geographic neighbours")
     p.add_argument("--lat-index", type=int, default=0)
     p.add_argument("--lon-index", type=int, default=1)
@@ -200,13 +232,27 @@ def main():
     audio, context, labels, coords, audio_node_index = load_nodes(
         args.input_dir, args.lat_index, args.lon_index, args.context_decimals
     )
+    num_classes = args.num_classes or int(labels.max()) + 1
+    multilabels = np.zeros((len(labels), num_classes), dtype=np.float32)
+    multilabels[np.arange(len(labels)), labels] = 1.0
+    is_mixup = np.zeros(len(labels), dtype=bool)
+    if args.mixup_dir:
+        mixed = load_mixup_nodes(args.mixup_dir, num_classes)
+        if mixed is None: raise RuntimeError('No usable mixup samples found')
+        ma, mc, my = mixed; start = len(coords)
+        audio = np.concatenate([audio, ma]); coords = np.concatenate([coords, mc])
+        labels = np.concatenate([labels, np.full(len(ma), -1, dtype=np.int64)])
+        multilabels = np.concatenate([multilabels, my]); is_mixup = np.concatenate([is_mixup, np.ones(len(ma), dtype=bool)])
+        context = np.concatenate([context, np.zeros((len(ma),) + context.shape[1:], dtype=context.dtype)])
+        audio_node_index = np.concatenate([audio_node_index, np.arange(start, start + len(ma))])
     row, col, distance_km = build_graph(coords, args.k, args.include_self)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(args.output_dir / "graph.npz", row=row, col=col, distance_km=distance_km,
                         num_nodes=np.array(len(coords), dtype=np.int64))
     payload = {"audio_embeddings": audio, "audio_embedding_node_index": audio_node_index,
                "spatiotemporal_contexts": context, "labels": labels,
-               "coordinates_lat_lon": coords}
+               "coordinates_lat_lon": coords, "multilabels": multilabels,
+               "is_mixup": is_mixup}
     np.savez_compressed(args.output_dir / "node_data.npz", **payload)
     counts = np.bincount(audio_node_index, minlength=len(coords))
     metadata = {"num_nodes": int(len(coords)), "num_edges": int(len(row)),

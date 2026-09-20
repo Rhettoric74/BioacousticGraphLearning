@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import pickle
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,18 @@ def as_numpy(x: Any) -> np.ndarray:
     if torch is not None and isinstance(x, torch.Tensor):
         return x.detach().cpu().numpy()
     return np.asarray(x)
+
+
+def report_memory(label: str):
+    """Best-effort RSS report; useful on cluster jobs without changing behavior."""
+    try:
+        import resource
+        rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # Linux reports KiB; macOS reports bytes.
+        rss_mb = rss / (1024 ** 2) if sys.platform == "darwin" else rss / 1024
+        print(f"[memory] {label}: peak RSS {rss_mb:.0f} MiB", flush=True)
+    except Exception:
+        pass
 
 
 def extract_coordinates(context: np.ndarray, lat_index: int, lon_index: int) -> np.ndarray:
@@ -236,6 +249,8 @@ def main():
     p.add_argument("--include-self", action="store_true")
     p.add_argument("--query-batch-size", type=int, default=32768,
                    help="Number of nodes queried at once; lower this if KNN construction OOMs")
+    p.add_argument("--uncompressed", action="store_true",
+                   help="Use np.savez instead of np.savez_compressed to avoid compression memory peaks")
     args = p.parse_args()
     if args.k < 1:
         p.error("-k must be positive")
@@ -243,6 +258,7 @@ def main():
     audio, context, labels, coords, audio_node_index = load_nodes(
         args.input_dir, args.lat_index, args.lon_index, args.context_decimals
     )
+    report_memory("after base data load")
     num_classes = args.num_classes or int(labels.max()) + 1
     multilabels = np.zeros((len(labels), num_classes), dtype=np.float32)
     multilabels[np.arange(len(labels)), labels] = 1.0
@@ -256,15 +272,20 @@ def main():
         multilabels = np.concatenate([multilabels, my]); is_mixup = np.concatenate([is_mixup, np.ones(len(ma), dtype=bool)])
         context = np.concatenate([context, np.zeros((len(ma),) + context.shape[1:], dtype=context.dtype)])
         audio_node_index = np.concatenate([audio_node_index, np.arange(start, start + len(ma))])
+        report_memory("after mixup concatenation")
     row, col, distance_km = build_graph(coords, args.k, args.include_self, args.query_batch_size)
+    report_memory("after KNN construction")
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(args.output_dir / "graph.npz", row=row, col=col, distance_km=distance_km,
-                        num_nodes=np.array(len(coords), dtype=np.int64))
+    save_npz = np.savez if args.uncompressed else np.savez_compressed
+    save_npz(args.output_dir / "graph.npz", row=row, col=col, distance_km=distance_km,
+             num_nodes=np.array(len(coords), dtype=np.int64))
     payload = {"audio_embeddings": audio, "audio_embedding_node_index": audio_node_index,
                "spatiotemporal_contexts": context, "labels": labels,
                "coordinates_lat_lon": coords, "multilabels": multilabels,
                "is_mixup": is_mixup}
-    np.savez_compressed(args.output_dir / "node_data.npz", **payload)
+    report_memory("before node data save")
+    save_npz(args.output_dir / "node_data.npz", **payload)
+    report_memory("after node data save")
     counts = np.bincount(audio_node_index, minlength=len(coords))
     metadata = {"num_nodes": int(len(coords)), "num_edges": int(len(row)),
                 "num_input_windows": int(len(audio)), "num_unique_recordings": int(len(coords)),

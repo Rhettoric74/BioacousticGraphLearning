@@ -206,33 +206,92 @@ def build_graph(coords: np.ndarray, k: int, include_self: bool, query_batch_size
 
 
 def load_mixup_nodes(input_dir: Path, num_classes: int):
-    """Load the pickle layout in load_mixup_embeddings and make graph nodes."""
-    audio, coords, targets = [], [], []
-    for path in sorted(input_dir.glob('*.pkl')):
-        with path.open('rb') as f: batch = pickle.load(f)
-        if 'audio_embeddings' not in batch or 'labels_sparse' not in batch: continue
-        a = as_numpy(batch['audio_embeddings'])
+    """Load mixup nodes without retaining all component-context objects.
+
+    The loader makes two passes over the pickle files.  The first counts valid
+    rows; the second fills preallocated arrays.  Thus all audio embeddings are
+    retained, but Python lists of every audio row and reconstructed component
+    contexts are never retained simultaneously.
+    """
+    files = sorted(input_dir.glob('*.pkl'))
+
+    def rows(path):
+        with path.open('rb') as f:
+            batch = pickle.load(f)
+        if 'audio_embeddings' not in batch or 'labels_sparse' not in batch:
+            return
+        audio = as_numpy(batch['audio_embeddings'])
         contexts = batch.get('component_contexts')
         if contexts is None and 'component_contexts_flat' in batch:
-            # The compact representation is reconstructed inline.
-            flat, lengths, shapes = batch['component_contexts_flat'], batch['component_contexts_lengths'], batch['component_contexts_shapes']
-            contexts, pos = [], 0
+            flat = np.asarray(batch['component_contexts_flat'])
+            lengths = batch['component_contexts_lengths']
+            shapes = batch['component_contexts_shapes']
+            contexts = []
+            pos = 0
             for length, shape in zip(lengths, shapes):
-                row = []
+                sample = []
                 for _ in range(length):
-                    size = int(np.prod(shape)); row.append(flat[pos:pos+size].reshape(shape)); pos += size
-                contexts.append(row)
-        if contexts is None: continue
+                    size = int(np.prod(shape))
+                    sample.append(flat[pos:pos + size].reshape(shape))
+                    pos += size
+                contexts.append(sample)
+        if contexts is None:
+            return
+
+        # Only these small per-file arrays survive until the caller consumes them.
+        valid_audio, valid_coords, valid_labels = [], [], []
         for i, labels in enumerate(batch['labels_sparse']):
-            if i >= len(a) or not np.isfinite(a[i]).all() or not contexts[i]: continue
-            c = np.asarray([np.asarray(x).reshape(-1)[:2] for x in contexts[i]], dtype=np.float32)
-            if not np.isfinite(c).all(): continue
-            y = np.zeros(num_classes, dtype=np.float32)
-            for label in np.asarray(labels).reshape(-1):
-                if 0 <= int(label) < num_classes: y[int(label)] = 1.0
-            audio.append(a[i].astype(np.float32)); coords.append(c.mean(0)); targets.append(y)
-    if not audio: return None
-    return np.stack(audio), np.stack(coords), np.stack(targets)
+            if i >= len(audio) or not np.isfinite(audio[i]).all() or not contexts[i]:
+                continue
+            component_coords = np.asarray(
+                [np.asarray(component).reshape(-1)[:2] for component in contexts[i]],
+                dtype=np.float32,
+            )
+            centroid = component_coords.mean(axis=0)
+            if not np.isfinite(centroid).all():
+                continue
+            valid_audio.append(audio[i])
+            valid_coords.append(centroid)
+            valid_labels.append(labels)
+        if valid_audio:
+            yield (np.asarray(valid_audio, dtype=np.float32),
+                   np.asarray(valid_coords, dtype=np.float32), valid_labels)
+        del batch, contexts
+
+    def count_rows():
+        total = 0
+        for path in files:
+            for audio, coords, labels in rows(path):
+                total += len(audio)
+        return total
+
+    total = count_rows()
+    if total == 0:
+        return None
+    # Preallocate once; this retains every audio embedding without repeated
+    # np.stack/np.concatenate copies.
+    sample_audio = None
+    for path in files:
+        sample_audio = next(rows(path), None)
+        if sample_audio is not None:
+            break
+    if sample_audio is None:
+        return None
+    audio_out = np.empty((total,) + sample_audio[0].shape[1:], dtype=np.float32)
+    coords_out = np.empty((total, 2), dtype=np.float32)
+    labels_out = np.zeros((total, num_classes), dtype=np.float32)
+    offset = 0
+    for path in files:
+        for audio, coords, labels in rows(path):
+            end = offset + len(audio)
+            audio_out[offset:end] = audio
+            coords_out[offset:end] = coords
+            for j, sparse in enumerate(labels):
+                indices = np.asarray(sparse).reshape(-1).astype(np.int64, copy=False)
+                indices = indices[(indices >= 0) & (indices < num_classes)]
+                labels_out[offset + j, indices] = 1.0
+            offset = end
+    return audio_out, coords_out, labels_out
 
 
 def main():

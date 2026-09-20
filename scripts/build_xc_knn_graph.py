@@ -165,22 +165,31 @@ def load_nodes(input_dir: Path, lat_index: int, lon_index: int,
     return audio, context[first_indices], labels[first_indices], coords[first_indices], node_index
 
 
-def build_graph(coords: np.ndarray, k: int, include_self: bool):
+def build_graph(coords: np.ndarray, k: int, include_self: bool, query_batch_size: int = 32768):
     if len(coords) < 2:
         raise ValueError("At least two valid recordings are required.")
     k_query = min(len(coords), k + (0 if include_self else 1))
     radians = np.deg2rad(coords)
     nn = NearestNeighbors(n_neighbors=k_query, metric="haversine", algorithm="ball_tree")
     nn.fit(radians)
-    distances, neighbours = nn.kneighbors(radians)
     if include_self:
         keep = slice(0, min(k, k_query))
     else:
         keep = slice(1, min(k + 1, k_query))
-    row = np.repeat(np.arange(len(coords)), neighbours[:, keep].shape[1])
-    col = neighbours[:, keep].reshape(-1)
-    km = distances[:, keep].reshape(-1) * 6371.0088
-    return row.astype(np.int64), col.astype(np.int64), km.astype(np.float32)
+    n_keep = min(k, k_query)
+    row = np.empty(len(coords) * n_keep, dtype=np.int64)
+    col = np.empty_like(row)
+    km = np.empty(len(row), dtype=np.float32)
+    for start in range(0, len(coords), query_batch_size):
+        stop = min(start + query_batch_size, len(coords))
+        distances, neighbours = nn.kneighbors(radians[start:stop])
+        selected = slice(0, n_keep) if include_self else slice(1, n_keep + 1)
+        sl = slice(start * n_keep, stop * n_keep)
+        row[sl] = np.repeat(np.arange(start, stop), n_keep)
+        col[sl] = neighbours[:, selected].reshape(-1)
+        km[sl] = distances[:, selected].reshape(-1) * 6371.0088
+        print(f"KNN queries: {stop:,}/{len(coords):,}")
+    return row, col, km
 
 
 def load_mixup_nodes(input_dir: Path, num_classes: int):
@@ -225,6 +234,8 @@ def main():
     p.add_argument("--context-decimals", type=int, default=6,
                    help="Decimal places retained for every context feature during deduplication")
     p.add_argument("--include-self", action="store_true")
+    p.add_argument("--query-batch-size", type=int, default=32768,
+                   help="Number of nodes queried at once; lower this if KNN construction OOMs")
     args = p.parse_args()
     if args.k < 1:
         p.error("-k must be positive")
@@ -245,7 +256,7 @@ def main():
         multilabels = np.concatenate([multilabels, my]); is_mixup = np.concatenate([is_mixup, np.ones(len(ma), dtype=bool)])
         context = np.concatenate([context, np.zeros((len(ma),) + context.shape[1:], dtype=context.dtype)])
         audio_node_index = np.concatenate([audio_node_index, np.arange(start, start + len(ma))])
-    row, col, distance_km = build_graph(coords, args.k, args.include_self)
+    row, col, distance_km = build_graph(coords, args.k, args.include_self, args.query_batch_size)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(args.output_dir / "graph.npz", row=row, col=col, distance_km=distance_km,
                         num_nodes=np.array(len(coords), dtype=np.int64))

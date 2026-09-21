@@ -24,7 +24,8 @@ def main():
     p.add_argument("--top-k", type=int, default=3)
     a = p.parse_args(); g = GraphData.load(a.graph_dir)
     ds = WalkDataset(g, a.walk_length, a.walks, a.p, a.q, a.mixup_probability, sphere_frequencies=a.sphere_scales); loader = DataLoader(ds, a.batch_size, shuffle=False, num_workers=0)
-    model = GraphWalkTransformer(g.audio.shape[-1], ds.loc_features.shape[-1], int(g.labels.max()) + 1, a.d_model, a.layers, a.heads, max_length=a.walk_length)
+    num_species = g.multilabels.shape[1] if g.multilabels is not None else int(g.labels.max()) + 1
+    model = GraphWalkTransformer(g.audio.shape[-1], ds.loc_features.shape[-1], num_species, a.d_model, a.layers, a.heads, max_length=a.walk_length)
     val_loader = None; subset_labels = None
     if a.birdset_dir:
         with open(a.perch_label_mapping) as f:

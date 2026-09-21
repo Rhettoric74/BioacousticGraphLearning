@@ -86,9 +86,15 @@ class WalkDataset(Dataset):
         for n in nodes:
             indices = self.node_audio[n]
             audios.append(self.g.audio[indices[int(self.rng.integers(len(indices)))]])
+        # Mixup nodes have scalar label -1 because their supervision is stored
+        # in species_multilabel.  The scalar value is still used as an input
+        # to nn.Embedding before masking, so replace it with a valid benign
+        # placeholder. It is never used as the training target.
+        species = self.g.labels[nodes].copy()
+        species[species < 0] = 0
         return {"audio": torch.from_numpy(np.stack(audios)).float(),
                 "location": torch.from_numpy(self.loc_features[nodes]).float(),
                 "coords": torch.from_numpy(self.g.coords[nodes]).float(),
-                "species": torch.from_numpy(self.g.labels[nodes]).long(),
+                "species": torch.from_numpy(species).long(),
                 "species_multilabel": torch.from_numpy(self.g.multilabels[nodes]).float(),
                 "nodes": torch.tensor(nodes).long()}

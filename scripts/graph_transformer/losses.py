@@ -9,7 +9,11 @@ def asymmetric_loss(logits, targets, gamma_neg=4.0, gamma_pos=1.0, clip=0.05):
     loss = targets * torch.log(xs_pos.clamp_min(1e-8)) + (1-targets) * torch.log(xs_neg.clamp_min(1e-8))
     pt = xs_pos * targets + xs_neg * (1-targets)
     gamma = gamma_pos * targets + gamma_neg * (1-targets)
-    return -(loss * (1-pt).pow(gamma)).mean()
+    # Sum over species classes, then average over examples/tokens.  Averaging
+    # over classes makes the loss shrink roughly in proportion to the number
+    # of species, which is undesirable for sparse multilabel targets.
+    per_token_loss = -(loss * (1-pt).pow(gamma)).sum(dim=-1)
+    return per_token_loss.mean()
 
 
 def compute_losses(out, batch, species_weight=1.0, location_weight=.1, audio_weight=.1):

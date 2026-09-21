@@ -18,9 +18,18 @@ class BirdSetDataset(Dataset):
     def __init__(self, path, subset_labels, num_model_classes, sphere_scales=8):
         with open(path, "rb") as f:
             data = pickle.load(f)
-        self.audio = np.concatenate(data["embeddings"], axis=0).astype(np.float32)
-        raw_context = np.concatenate(data["st_context"], axis=0).astype(np.float32)
-        raw_labels = [label for batch in data["labels"] for label in batch]
+        if not (len(data["embeddings"]) == len(data["st_context"]) == len(data["labels"])):
+            raise ValueError(f"Batch-count mismatch in {path}: embeddings={len(data['embeddings'])}, st_context={len(data['st_context'])}, labels={len(data['labels'])}")
+        audio_parts, context_parts, raw_labels = [], [], []
+        for batch_index, (audio_batch, context_batch, label_batch) in enumerate(zip(data["embeddings"], data["st_context"], data["labels"])):
+            lengths = (len(audio_batch), len(context_batch), len(label_batch))
+            if len(set(lengths)) != 1:
+                raise ValueError(f"Sample-count mismatch in {path}, batch {batch_index}: embeddings={lengths[0]}, st_context={lengths[1]}, labels={lengths[2]}")
+            audio_parts.append(np.asarray(audio_batch))
+            context_parts.append(np.asarray(context_batch))
+            raw_labels.extend(label_batch)
+        self.audio = np.concatenate(audio_parts, axis=0).astype(np.float32)
+        raw_context = np.concatenate(context_parts, axis=0).astype(np.float32)
         if len(self.audio) != len(raw_labels) or len(self.audio) != len(raw_context):
             raise ValueError(f"BirdSet fields have inconsistent lengths in {path}")
         coords = raw_context.reshape(len(raw_context), -1)[:, :2]
@@ -62,3 +71,32 @@ def evaluate_birdset(model, loader, device="cuda"):
                                     for c in range(labels.shape[1]) if labels[:, c].max() > labels[:, c].min()])) if any(labels[:, c].max() > labels[:, c].min() for c in range(labels.shape[1])) else float("nan"),
             "top1": float(labels[np.arange(len(labels)), probabilities.argmax(1)].mean()),
             "n_valid_classes": len(per_class), "n_samples": len(labels)}
+
+
+@torch.no_grad()
+def evaluate_birdset_context(model, loader, device="cuda", context_length=8):
+    """Evaluate consecutive samples jointly as one masked-species sequence."""
+    model.eval()
+    audio = torch.cat([b["audio"] for b in loader])
+    location = torch.cat([b["location"] for b in loader])
+    labels = torch.cat([b["labels"] for b in loader]).numpy()
+    probabilities = []
+    for start in range(0, len(labels), context_length):
+        stop = min(start + context_length, len(labels))
+        a = audio[start:stop].to(device).unsqueeze(0)
+        l = location[start:stop].to(device).unsqueeze(0)
+        species = torch.zeros((1, stop - start), dtype=torch.long, device=device)
+        logits = model(a, l, species, mask_species=True)["species"][0]
+        probabilities.append(torch.sigmoid(logits).cpu().numpy())
+    probabilities = np.concatenate(probabilities)
+    aucs, aps = [], []
+    for c in range(labels.shape[1]):
+        if labels[:, c].min() == labels[:, c].max():
+            continue
+        aucs.append(roc_auc_score(labels[:, c], probabilities[:, c]))
+        aps.append(average_precision_score(labels[:, c], probabilities[:, c]))
+    return {"macro_auroc": float(np.mean(aucs)) if aucs else float("nan"),
+            "cmAP": float(np.mean(aps)) if aps else float("nan"),
+            "top1": float(labels[np.arange(len(labels)), probabilities.argmax(1)].mean()),
+            "n_valid_classes": len(aucs), "n_samples": len(labels),
+            "context_length": context_length}

@@ -7,12 +7,13 @@ from .losses import compute_losses
 
 class Trainer:
     def __init__(self, model, optimizer, device="cuda", weights=(1., .1, .1),
-                 validation_loader=None, checkpoint_dir=None, top_k=3):
+                 validation_loader=None, checkpoint_dir=None, top_k=3, validation_context_length=1):
         self.model, self.optimizer, self.device = model.to(device), optimizer, device
         self.weights = weights
         self.validation_loader = validation_loader
         self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
         self.top_k = top_k
+        self.validation_context_length = validation_context_length
         self.saved = []
         if self.checkpoint_dir: self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -38,8 +39,12 @@ class Trainer:
                 for k, v in self.step(batch).items(): sums[k] = sums.get(k, 0) + v
             metrics = {k: round(v / len(loader), 4) for k, v in sums.items()}
             if self.validation_loader is not None:
-                from .birdset import evaluate_birdset
-                metrics.update({"val_" + k: v for k, v in evaluate_birdset(self.model, self.validation_loader, self.device).items()})
+                from .birdset import evaluate_birdset, evaluate_birdset_context
+                if self.validation_context_length <= 1:
+                    result = evaluate_birdset(self.model, self.validation_loader, self.device)
+                else:
+                    result = evaluate_birdset_context(self.model, self.validation_loader, self.device, self.validation_context_length)
+                metrics.update({"val_" + k: v for k, v in result.items()})
                 score = metrics["val_macro_auroc"]
                 if self.checkpoint_dir and score == score:
                     path = self.checkpoint_dir / f"epoch_{epoch:03d}_auroc_{score:.6f}.pt"

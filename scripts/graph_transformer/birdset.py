@@ -18,16 +18,28 @@ class BirdSetDataset(Dataset):
     def __init__(self, path, subset_labels, num_model_classes, sphere_scales=8):
         with open(path, "rb") as f:
             data = pickle.load(f)
-        if not (len(data["embeddings"]) == len(data["st_context"]) == len(data["labels"])):
-            raise ValueError(f"Batch-count mismatch in {path}: embeddings={len(data['embeddings'])}, st_context={len(data['st_context'])}, labels={len(data['labels'])}")
         audio_parts, context_parts, raw_labels = [], [], []
-        for batch_index, (audio_batch, context_batch, label_batch) in enumerate(zip(data["embeddings"], data["st_context"], data["labels"])):
-            lengths = (len(audio_batch), len(context_batch), len(label_batch))
-            if len(set(lengths)) != 1:
-                raise ValueError(f"Sample-count mismatch in {path}, batch {batch_index}: embeddings={lengths[0]}, st_context={lengths[1]}, labels={lengths[2]}")
+        feature_batch_count = len(data["embeddings"])
+        label_batches = data["labels"]
+        labels_are_flat = len(label_batches) != feature_batch_count
+        if labels_are_flat:
+            expected_samples = sum(len(batch) for batch in data["embeddings"])
+            if len(label_batches) != expected_samples:
+                raise ValueError(f"SSW label mismatch in {path}: feature samples={expected_samples}, labels={len(label_batches)}")
+            batch_iterator = zip(data["embeddings"], data["st_context"], [None] * feature_batch_count)
+        else:
+            batch_iterator = zip(data["embeddings"], data["st_context"], label_batches)
+        for batch_index, (audio_batch, context_batch, label_batch) in enumerate(batch_iterator):
+            if len(audio_batch) != len(context_batch):
+                raise ValueError(f"Sample-count mismatch in {path}, batch {batch_index}: embeddings={len(audio_batch)}, st_context={len(context_batch)}")
             audio_parts.append(np.asarray(audio_batch))
             context_parts.append(np.asarray(context_batch))
-            raw_labels.extend(label_batch)
+            if not labels_are_flat:
+                if len(audio_batch) != len(label_batch):
+                    raise ValueError(f"Sample-count mismatch in {path}, batch {batch_index}: embeddings={len(audio_batch)}, labels={len(label_batch)}")
+                raw_labels.extend(label_batch)
+        if labels_are_flat:
+            raw_labels = list(label_batches)
         self.audio = np.concatenate(audio_parts, axis=0).astype(np.float32)
         raw_context = np.concatenate(context_parts, axis=0).astype(np.float32)
         if len(self.audio) != len(raw_labels) or len(self.audio) != len(raw_context):

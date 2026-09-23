@@ -22,8 +22,8 @@ def main():
     p.add_argument("--perch-label-mapping", default="/home/svu/e1583377/Spatial_Perch_Transfer_Learning/assets/perch_v2_label_mapping.json")
     p.add_argument("--checkpoint-dir", default="checkpoints/graph_transformer")
     p.add_argument("--top-k", type=int, default=3)
-    p.add_argument("--context-evaluation-length", type=int, default=1,
-                   help="Evaluate consecutive BirdSet samples jointly; 1 uses singleton inference")
+    p.add_argument("--context-evaluation-length", type=int, nargs="+", default=[1],
+                   help="One or more context lengths for evaluation, e.g. --context-evaluation-length 8 4 2 1")
     a = p.parse_args(); g = GraphData.load(a.graph_dir)
     ds = WalkDataset(g, a.walk_length, a.walks, a.p, a.q, a.mixup_probability, sphere_frequencies=a.sphere_scales); loader = DataLoader(ds, a.batch_size, shuffle=False, num_workers=0)
     num_species = g.multilabels.shape[1] if g.multilabels is not None else int(g.labels.max()) + 1
@@ -50,7 +50,7 @@ def main():
         val_loader = DataLoader(val, batch_size=1024, shuffle=False, num_workers=0)
     trainer = Trainer(model, torch.optim.AdamW(model.parameters(), lr=a.lr), a.device,
                       (1., a.location_weight, a.audio_weight), val_loader,
-                      a.checkpoint_dir, a.top_k, a.context_evaluation_length)
+                      a.checkpoint_dir, a.top_k, a.context_evaluation_length[0])
     saved = trainer.fit(loader, a.epochs)
     if val_loader is not None and saved:
         from graph_transformer.birdset import evaluate_birdset, evaluate_birdset_context
@@ -60,11 +60,12 @@ def main():
             path = Path(a.birdset_dir) / f"{split}.pkl"
             if path.exists():
                 test = BirdSetDataset(path, split_mapping(split), model.species_head.out_features, a.sphere_scales)
-                test_loader = DataLoader(test, 1024, shuffle=False)
-                if a.context_evaluation_length > 1:
-                    result = evaluate_birdset_context(model, test_loader, a.device, a.context_evaluation_length)
-                else:
-                    result = evaluate_birdset(model, test_loader, a.device)
-                print(split, result)
+                for context_length in a.context_evaluation_length:
+                    test_loader = DataLoader(test, 1024, shuffle=False)
+                    if context_length > 1:
+                        result = evaluate_birdset_context(model, test_loader, a.device, context_length)
+                    else:
+                        result = evaluate_birdset(model, test_loader, a.device)
+                    print(split, result)
 
 if __name__ == "__main__": main()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 import torch
 from torch import nn
+import torch.nn.functional as F
 
 
 class GraphWalkTransformer(nn.Module):
@@ -15,8 +16,16 @@ class GraphWalkTransformer(nn.Module):
         layer = nn.TransformerEncoderLayer(d_model, heads, 4 * d_model, dropout, batch_first=True, norm_first=True, activation="gelu")
         self.encoder = nn.TransformerEncoder(layer, layers)
         self.norm = nn.LayerNorm(d_model)
-        self.species_head = nn.Linear(d_model, num_species)
-        self.location_head = nn.Linear(d_model, location_dim)
+        # Tie the output classifier to the species-token embeddings. This
+        # makes the species embeddings train directly from the species loss
+        # and avoids a separate biased classifier representation.
+        self.species_head = nn.Linear(d_model, num_species, bias=False)
+        self.species_head.weight = self.species.weight
+        self.location_head = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.GELU(),
+            nn.Linear(d_model, 3),
+        )
         self.audio_head = nn.Linear(d_model, audio_dim)
 
     def forward(self, audio, location, species, mask_species=True, mask_location=False, mask_audio=False):
@@ -31,4 +40,12 @@ class GraphWalkTransformer(nn.Module):
         pos = torch.arange(n * 3, device=x.device).unsqueeze(0)
         x = self.encoder(x + self.modality(mods) + self.position(pos))
         x = self.norm(x.reshape(b, n, 3, -1))
-        return {"species": self.species_head(x[:, :, 2]), "location": self.location_head(x[:, :, 1]), "audio": self.audio_head(x[:, :, 0]), "hidden": x}
+        raw_location = self.location_head(x[:, :, 1])
+        location_vector = F.normalize(raw_location, dim=-1, eps=1e-8)
+        latitude = torch.rad2deg(torch.asin(location_vector[..., 2].clamp(-1.0, 1.0)))
+        longitude = torch.rad2deg(torch.atan2(location_vector[..., 1], location_vector[..., 0]))
+        coordinates = torch.stack((latitude, longitude), dim=-1)
+        return {"species": self.species_head(x[:, :, 2]),
+                "coordinates": coordinates,
+                "location_vector": location_vector,
+                "audio": self.audio_head(x[:, :, 0]), "hidden": x}

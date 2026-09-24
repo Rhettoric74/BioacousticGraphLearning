@@ -24,6 +24,8 @@ def main():
     p.add_argument("--top-k", type=int, default=3)
     p.add_argument("--context-evaluation-length", type=int, nargs="+", default=[1],
                    help="One or more context lengths for evaluation, e.g. --context-evaluation-length 8 4 2 1")
+    p.add_argument("--species-location-mask-prob", type=float, default=0.0,
+                   help="Probability of masking each location token during species training")
     a = p.parse_args(); g = GraphData.load(a.graph_dir)
     ds = WalkDataset(g, a.walk_length, a.walks, a.p, a.q, a.mixup_probability, sphere_frequencies=a.sphere_scales); loader = DataLoader(ds, a.batch_size, shuffle=False, num_workers=0)
     num_species = g.multilabels.shape[1] if g.multilabels is not None else int(g.labels.max()) + 1
@@ -50,7 +52,8 @@ def main():
         val_loader = DataLoader(val, batch_size=1024, shuffle=False, num_workers=0)
     trainer = Trainer(model, torch.optim.AdamW(model.parameters(), lr=a.lr), a.device,
                       (1., a.location_weight, a.audio_weight), val_loader,
-                      a.checkpoint_dir, a.top_k, a.context_evaluation_length[0])
+                      a.checkpoint_dir, a.top_k, a.context_evaluation_length[0],
+                      a.species_location_mask_prob)
     saved = trainer.fit(loader, a.epochs)
     if val_loader is not None and saved:
         from graph_transformer.birdset import evaluate_birdset, evaluate_birdset_context

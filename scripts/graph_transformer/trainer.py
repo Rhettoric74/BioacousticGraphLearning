@@ -7,13 +7,15 @@ from .losses import compute_losses
 
 class Trainer:
     def __init__(self, model, optimizer, device="cuda", weights=(1., .1, .1),
-                 validation_loader=None, checkpoint_dir=None, top_k=3, validation_context_length=1):
+                 validation_loader=None, checkpoint_dir=None, top_k=3,
+                 validation_context_length=1, species_location_mask_prob=0.0):
         self.model, self.optimizer, self.device = model.to(device), optimizer, device
         self.weights = weights
         self.validation_loader = validation_loader
         self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
         self.top_k = top_k
         self.validation_context_length = validation_context_length
+        self.species_location_mask_prob = species_location_mask_prob
         self.saved = []
         if self.checkpoint_dir: self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -21,7 +23,11 @@ class Trainer:
         batch = {k: v.to(self.device) for k, v in batch.items() if torch.is_tensor(v)}
         # Each objective masks its own target modality. This avoids trivial
         # identity reconstruction through the input token being predicted.
-        species_out = self.model(batch["audio"], batch["location"], batch["species"], mask_species=True)
+        species_out = self.model(
+            batch["audio"], batch["location"], batch["species"],
+            mask_species=True,
+            location_mask_prob=self.species_location_mask_prob,
+        )
         location_out = self.model(batch["audio"], batch["location"], batch["species"], mask_species=False, mask_location=True)
         audio_out = self.model(batch["audio"], batch["location"], batch["species"], mask_species=False, mask_audio=True)
         species_loss = compute_losses(species_out, batch, 1., 0., 0.)["species"]

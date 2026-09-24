@@ -9,7 +9,14 @@ class GraphWalkTransformer(nn.Module):
                  heads=8, dropout=.1, max_length=64):
         super().__init__()
         self.audio = nn.Sequential(nn.LayerNorm(audio_dim), nn.Linear(audio_dim, d_model))
-        self.location = nn.Sequential(nn.LayerNorm(location_dim), nn.Linear(location_dim, d_model), nn.GELU(), nn.Linear(d_model, d_model))
+        self.location = nn.Sequential(
+            nn.LayerNorm(location_dim),
+            nn.Linear(location_dim, d_model),
+            nn.GELU(),
+            nn.Dropout(0.5),
+            nn.Linear(d_model, d_model),
+            nn.Dropout(0.5),
+        )
         self.species = nn.Embedding(num_species, d_model)
         self.modality = nn.Embedding(3, d_model)
         self.position = nn.Embedding(max_length * 3, d_model)
@@ -28,13 +35,17 @@ class GraphWalkTransformer(nn.Module):
         )
         self.audio_head = nn.Linear(d_model, audio_dim)
 
-    def forward(self, audio, location, species, mask_species=True, mask_location=False, mask_audio=False):
+    def forward(self, audio, location, species, mask_species=True, mask_location=False,
+                mask_audio=False, location_mask_prob=0.0):
         b, n, _ = audio.shape
         s = self.species(species)
         if mask_species: s = torch.zeros_like(s)
         a = self.audio(audio); l = self.location(location)
         if mask_audio: a = torch.zeros_like(a)
         if mask_location: l = torch.zeros_like(l)
+        if location_mask_prob > 0 and self.training:
+            keep = torch.rand(l.shape[:2], device=l.device) >= location_mask_prob
+            l = l * keep.unsqueeze(-1)
         x = torch.stack([a, l, s], 2).reshape(b, n * 3, -1)
         mods = torch.arange(3, device=x.device).repeat(n).unsqueeze(0)
         pos = torch.arange(n * 3, device=x.device).unsqueeze(0)

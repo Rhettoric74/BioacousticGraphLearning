@@ -22,6 +22,9 @@ def main():
     p.add_argument("--perch-label-mapping", default="/home/svu/e1583377/Spatial_Perch_Transfer_Learning/assets/perch_v2_label_mapping.json")
     p.add_argument("--checkpoint-dir", default="checkpoints/graph_transformer")
     p.add_argument("--top-k", type=int, default=3)
+    p.add_argument("--checkpoint-metric", choices=["macro_auroc", "cmAP", "top1"],
+                   default="macro_auroc",
+                   help="Validation metric used to retain best checkpoints")
     p.add_argument("--context-evaluation-length", type=int, nargs="+", default=[1],
                    help="One or more context lengths for evaluation, e.g. --context-evaluation-length 8 4 2 1")
     p.add_argument("--species-location-mask-prob", type=float, default=0.0,
@@ -53,22 +56,27 @@ def main():
     trainer = Trainer(model, torch.optim.AdamW(model.parameters(), lr=a.lr), a.device,
                       (1., a.location_weight, a.audio_weight), val_loader,
                       a.checkpoint_dir, a.top_k, a.context_evaluation_length[0],
-                      a.species_location_mask_prob)
+                      a.species_location_mask_prob, a.checkpoint_metric)
     saved = trainer.fit(loader, a.epochs)
     if val_loader is not None and saved:
         from graph_transformer.birdset import evaluate_birdset, evaluate_birdset_context
-        best = max(saved, key=lambda x: x[0]); checkpoint = torch.load(best[1], map_location=a.device)
-        model.load_state_dict(checkpoint["model_state"])
-        for split in ["HSN", "SNE", "PER", "UHH", "NES", "SSW"]:
-            path = Path(a.birdset_dir) / f"{split}.pkl"
-            if path.exists():
-                test = BirdSetDataset(path, split_mapping(split), model.species_head.out_features, a.sphere_scales)
-                for context_length in a.context_evaluation_length:
-                    test_loader = DataLoader(test, 1024, shuffle=False)
-                    if context_length > 1:
-                        result = evaluate_birdset_context(model, test_loader, a.device, context_length)
-                    else:
-                        result = evaluate_birdset(model, test_loader, a.device)
-                    print(split, result)
+        best = max(saved, key=lambda x: x[0])
+        checkpoints = [("best", best[1])]
+        if trainer.last_checkpoint is not None:
+            checkpoints.append(("last", trainer.last_checkpoint))
+        for checkpoint_name, checkpoint_path in checkpoints:
+            checkpoint = torch.load(checkpoint_path, map_location=a.device, weights_only=True)
+            model.load_state_dict(checkpoint["model_state"])
+            for split in ["HSN", "SNE", "PER", "UHH", "NES", "SSW"]:
+                path = Path(a.birdset_dir) / f"{split}.pkl"
+                if path.exists():
+                    test = BirdSetDataset(path, split_mapping(split), model.species_head.out_features, a.sphere_scales)
+                    for context_length in a.context_evaluation_length:
+                        test_loader = DataLoader(test, 1024, shuffle=False)
+                        if context_length > 1:
+                            result = evaluate_birdset_context(model, test_loader, a.device, context_length)
+                        else:
+                            result = evaluate_birdset(model, test_loader, a.device)
+                        print(checkpoint_name, split, result)
 
 if __name__ == "__main__": main()

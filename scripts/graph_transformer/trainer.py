@@ -8,7 +8,8 @@ from .losses import compute_losses
 class Trainer:
     def __init__(self, model, optimizer, device="cuda", weights=(1., .1, .1),
                  validation_loader=None, checkpoint_dir=None, top_k=3,
-                 validation_context_length=1, species_location_mask_prob=0.0):
+                 validation_context_length=1, species_location_mask_prob=0.0,
+                 checkpoint_metric="macro_auroc"):
         self.model, self.optimizer, self.device = model.to(device), optimizer, device
         self.weights = weights
         self.validation_loader = validation_loader
@@ -16,6 +17,8 @@ class Trainer:
         self.top_k = top_k
         self.validation_context_length = validation_context_length
         self.species_location_mask_prob = species_location_mask_prob
+        self.checkpoint_metric = checkpoint_metric
+        self.last_checkpoint = None
         self.saved = []
         if self.checkpoint_dir: self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -51,12 +54,18 @@ class Trainer:
                 else:
                     result = evaluate_birdset_context(self.model, self.validation_loader, self.device, self.validation_context_length)
                 metrics.update({"val_" + k: v for k, v in result.items()})
-                score = metrics["val_macro_auroc"]
+                score = metrics[f"val_{self.checkpoint_metric}"]
+                last_path = self.checkpoint_dir / "last.pt" if self.checkpoint_dir else None
+                checkpoint = {"epoch": epoch, "checkpoint_metric": self.checkpoint_metric,
+                              "checkpoint_score": score,
+                              "model_state": self.model.state_dict(),
+                              "optimizer_state": self.optimizer.state_dict()}
+                if last_path is not None:
+                    torch.save(checkpoint, last_path)
+                    self.last_checkpoint = last_path
                 if self.checkpoint_dir and score == score:
-                    path = self.checkpoint_dir / f"epoch_{epoch:03d}_auroc_{score:.6f}.pt"
-                    torch.save({"epoch": epoch, "val_macro_auroc": score,
-                                "model_state": self.model.state_dict(),
-                                "optimizer_state": self.optimizer.state_dict()}, path)
+                    path = self.checkpoint_dir / f"epoch_{epoch:03d}_{self.checkpoint_metric}_{score:.6f}.pt"
+                    torch.save(checkpoint, path)
                     self.saved.append((score, path)); self.saved.sort(key=lambda x: x[0], reverse=True)
                     while len(self.saved) > self.top_k:
                         _, old = self.saved.pop(); old.unlink(missing_ok=True)

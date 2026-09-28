@@ -45,6 +45,7 @@ class BirdSetDataset(Dataset):
         if len(self.audio) != len(raw_labels) or len(self.audio) != len(raw_context):
             raise ValueError(f"BirdSet fields have inconsistent lengths in {path}")
         coords = raw_context.reshape(len(raw_context), -1)[:, :2]
+        self.coords = coords.astype(np.float32)
         with torch.no_grad():
             self.location = Sphere2VecSphereM(sphere_scales)(torch.from_numpy(coords)).numpy()
         self.labels = np.zeros((len(raw_labels), num_model_classes), dtype=np.float32)
@@ -61,6 +62,7 @@ class BirdSetDataset(Dataset):
     def __getitem__(self, index):
         return {"audio": torch.from_numpy(self.audio[index]),
                 "location": torch.from_numpy(self.location[index]),
+                "coords": torch.from_numpy(self.coords[index]),
                 "labels": torch.from_numpy(self.labels[index])}
 
 
@@ -127,3 +129,39 @@ def evaluate_birdset_context(model, loader, device="cuda", context_length=8):
             "top1": top1_from_full_logits(full_logits, labels),
             "n_valid_classes": len(aucs), "n_samples": len(labels),
             "context_length": context_length}
+
+
+def haversine_km(pred_coords, true_coords):
+    pred = np.deg2rad(pred_coords)
+    true = np.deg2rad(true_coords)
+    dlat = pred[:, 0] - true[:, 0]
+    dlon = np.arctan2(np.sin(pred[:, 1] - true[:, 1]),
+                      np.cos(pred[:, 1] - true[:, 1]))
+    a = np.sin(dlat / 2) ** 2 + np.cos(pred[:, 0]) * np.cos(true[:, 0]) * np.sin(dlon / 2) ** 2
+    return 6371.0088 * 2 * np.arcsin(np.sqrt(np.clip(a, 0, 1)))
+
+
+@torch.no_grad()
+def evaluate_geolocation(model, loader, device="cuda", context_length=1):
+    """Evaluate audio/context-to-coordinate prediction in kilometres.
+
+    Both location and species tokens are masked, so this measures geolocation
+    without supplying the true coordinates or labels.
+    """
+    model.eval()
+    audio = torch.cat([b["audio"] for b in loader])
+    coords = torch.cat([b["coords"] for b in loader]).numpy()
+    predicted = []
+    for start in range(0, len(coords), context_length):
+        stop = min(start + context_length, len(coords))
+        a = audio[start:stop].to(device).unsqueeze(0)
+        location = torch.zeros((1, stop - start, model.location[0].normalized_shape[0]), device=device)
+        species = torch.zeros((1, stop - start), dtype=torch.long, device=device)
+        output = model(a, location, species, mask_species=True, mask_location=True)
+        predicted.append(output["coordinates"][0].cpu().numpy())
+    predicted = np.concatenate(predicted)
+    errors = haversine_km(predicted, coords)
+    return {"median_error_km": float(np.median(errors)),
+            "mean_error_km": float(np.mean(errors)),
+            "p90_error_km": float(np.percentile(errors, 90)),
+            "n_samples": len(errors), "context_length": context_length}

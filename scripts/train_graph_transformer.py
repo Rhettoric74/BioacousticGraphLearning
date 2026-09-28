@@ -59,7 +59,7 @@ def main():
                       a.species_location_mask_prob, a.checkpoint_metric)
     saved = trainer.fit(loader, a.epochs)
     if val_loader is not None and saved:
-        from graph_transformer.birdset import evaluate_birdset, evaluate_birdset_context
+        from graph_transformer.birdset import evaluate_birdset, evaluate_birdset_context, evaluate_geolocation
         best = max(saved, key=lambda x: x[0])
         checkpoints = [("best", best[1])]
         if trainer.last_checkpoint is not None:
@@ -78,5 +78,9 @@ def main():
                         else:
                             result = evaluate_birdset(model, test_loader, a.device)
                         print(checkpoint_name, split, result)
+                    geo_loader = DataLoader(test, 1024, shuffle=False)
+                    for context_length in a.context_evaluation_length:
+                        geo = evaluate_geolocation(model, geo_loader, a.device, context_length)
+                        print(checkpoint_name, split, "geolocation", geo)
 
 if __name__ == "__main__": main()

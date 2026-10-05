@@ -1,34 +1,27 @@
 #!/usr/bin/env python3
-"""Stream FSD50K from Hugging Face and precompute Perch embeddings.
-
-The encoder adapter supplied with --encoder must expose:
-
-    encode(samples) -> array/tensor of shape (batch, embedding_dim)
-
-Each sample is the Hugging Face audio dictionary with ``array`` and
-``sampling_rate`` fields. This keeps the Perch-specific API outside this
-repository because Perch installations differ across clusters.
-"""
+"""Stream FSD50K from Hugging Face and precompute Perch 2.0 embeddings."""
 import argparse
-import importlib
 import numpy as np
+import librosa
 
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("output")
-    p.add_argument("--encoder", required=True, help="Python module:function accepting audio dictionaries")
     p.add_argument("--dataset", default="CLAPv2/FSD50K")
     p.add_argument("--splits", nargs="+", default=["train", "validation", "test"])
     p.add_argument("--batch-size", type=int, default=16)
     p.add_argument("--max-samples", type=int, default=None)
     p.add_argument("--exclude-label", action="append", default=[],
                    help="Case-insensitive label to exclude; repeat as needed")
+    p.add_argument("--sample-rate", type=int, default=32000)
+    p.add_argument("--clip-seconds", type=float, default=5.0)
     args = p.parse_args()
 
     from datasets import load_dataset
-    module_name, function_name = args.encoder.split(":", 1)
-    encode = getattr(importlib.import_module(module_name), function_name)
+    from perch_hoplite.zoo import model_configs
+    model = model_configs.load_model_by_name("perch_v2")
+    clip_samples = int(args.sample_rate * args.clip_seconds)
     excluded = {x.casefold() for x in args.exclude_label}
     embeddings, ids = [], []
     total = 0
@@ -43,17 +36,30 @@ def main():
             labels = {x.strip().casefold() for x in label_text.split(",")}
             if excluded.intersection(labels):
                 continue
-            batch.append(row["audio"])
+            audio = row["audio"]
+            waveform = np.asarray(audio["array"], dtype=np.float32)
+            if int(audio["sampling_rate"]) != args.sample_rate:
+                waveform = librosa.resample(waveform, orig_sr=int(audio["sampling_rate"]), target_sr=args.sample_rate)
+            if waveform.ndim > 1:
+                waveform = waveform.mean(axis=-1)
+            if len(waveform) < clip_samples:
+                waveform = np.pad(waveform, (0, clip_samples - len(waveform)))
+            else:
+                waveform = waveform[:clip_samples]
+            peak = np.max(np.abs(waveform)) if len(waveform) else 0.0
+            if peak > 0:
+                waveform = waveform / peak * 0.25
+            batch.append(waveform)
             batch_ids.append(f"{split}:{row.get('index', index)}")
             if len(batch) == args.batch_size:
-                out = np.asarray(encode(batch), dtype=np.float32)
+                out = np.stack([np.asarray(model.embed(w).embeddings) for w in batch]).astype(np.float32)
                 if out.ndim != 2 or len(out) != len(batch):
                     raise ValueError(f"Encoder returned {out.shape}; expected ({len(batch)}, D)")
                 embeddings.append(out); ids.extend(batch_ids); total += len(batch)
                 print(f"processed {total}", flush=True)
                 batch, batch_ids = [], []
         if batch:
-            out = np.asarray(encode(batch), dtype=np.float32)
+            out = np.stack([np.asarray(model.embed(w).embeddings) for w in batch]).astype(np.float32)
             if out.ndim != 2 or len(out) != len(batch):
                 raise ValueError(f"Encoder returned {out.shape}; expected ({len(batch)}, D)")
             embeddings.append(out); ids.extend(batch_ids); total += len(batch)

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import numpy as np
 from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
-from graph_transformer.data import GraphData, WalkDataset
+from graph_transformer.data import GraphData, WalkDataset, NegativeAudioWalkDataset
 from graph_transformer.model import GraphWalkTransformer
 from graph_transformer.trainer import Trainer
 from graph_transformer.birdset import BirdSetDataset
@@ -16,6 +17,8 @@ def main():
     p.add_argument("--layers", type=int, default=4); p.add_argument("--heads", type=int, default=8); p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--p", type=float, default=1.0); p.add_argument("--q", type=float, default=1.0); p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--mixup-probability", type=float, default=0.0)
+    p.add_argument("--negative-embeddings", default=None)
+    p.add_argument("--negative-replacement-probability", type=float, default=0.0)
     p.add_argument("--sphere-scales", type=int, default=8)
     p.add_argument("--location-weight", type=float, default=.1); p.add_argument("--audio-weight", type=float, default=.1)
     p.add_argument("--birdset-dir", default=None, help="Directory containing POW.pkl and evaluation split pickles")
@@ -30,7 +33,12 @@ def main():
     p.add_argument("--species-location-mask-prob", type=float, default=0.0,
                    help="Probability of masking each location token during species training")
     a = p.parse_args(); g = GraphData.load(a.graph_dir)
-    ds = WalkDataset(g, a.walk_length, a.walks, a.p, a.q, a.mixup_probability, sphere_frequencies=a.sphere_scales); loader = DataLoader(ds, a.batch_size, shuffle=False, num_workers=0)
+    ds = WalkDataset(g, a.walk_length, a.walks, a.p, a.q, a.mixup_probability, sphere_frequencies=a.sphere_scales)
+    if a.negative_embeddings:
+        negative_file = np.load(a.negative_embeddings)
+        negative_audio = negative_file["embeddings"] if hasattr(negative_file, "files") and "embeddings" in negative_file.files else negative_file
+        ds = NegativeAudioWalkDataset(ds, negative_audio, a.negative_replacement_probability)
+    loader = DataLoader(ds, a.batch_size, shuffle=False, num_workers=0)
     num_species = g.multilabels.shape[1] if g.multilabels is not None else int(g.labels.max()) + 1
     model = GraphWalkTransformer(g.audio.shape[-1], ds.loc_features.shape[-1], num_species, a.d_model, a.layers, a.heads, max_length=a.walk_length)
     val_loader = None; subset_labels = None

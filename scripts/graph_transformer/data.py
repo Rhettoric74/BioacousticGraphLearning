@@ -98,3 +98,42 @@ class WalkDataset(Dataset):
                 "species": torch.from_numpy(species).long(),
                 "species_multilabel": torch.from_numpy(self.g.multilabels[nodes]).float(),
                 "nodes": torch.tensor(nodes).long()}
+
+
+class NegativeAudioWalkDataset(Dataset):
+    """Wrap WalkDataset and replace selected audio tokens with negative audio.
+
+    Negative embeddings must have the same dimension as ``graph.audio``. The
+    graph node's location is retained, while its multilabel target is set to
+    zero for every replaced token.
+    """
+    def __init__(self, base_dataset, negative_embeddings, replacement_probability=0.0, seed=0):
+        self.base = base_dataset
+        self.g = base_dataset.g
+        self.loc_features = base_dataset.loc_features
+        negative_embeddings = np.asarray(negative_embeddings, dtype=np.float32)
+        if negative_embeddings.ndim != 2 or negative_embeddings.shape[1] != self.base.g.audio.shape[-1]:
+            raise ValueError(f"Negative embeddings must have shape (N, {self.base.g.audio.shape[-1]})")
+        if not 0 <= replacement_probability <= 1:
+            raise ValueError("replacement_probability must be in [0, 1]")
+        self.negative_embeddings = negative_embeddings
+        self.replacement_probability = replacement_probability
+        self.rng = np.random.default_rng(seed)
+
+    def __len__(self): return len(self.base)
+
+    def __getitem__(self, index):
+        item = self.base[index]
+        replace = self.rng.random(item["audio"].shape[0]) < self.replacement_probability
+        if replace.any():
+            negative = self.negative_embeddings[self.rng.integers(len(self.negative_embeddings), size=int(replace.sum()))]
+            audio = item["audio"].clone()
+            targets = item["species_multilabel"].clone()
+            audio[torch.from_numpy(replace)] = torch.from_numpy(negative)
+            targets[torch.from_numpy(replace)] = 0.0
+            item["audio"] = audio
+            item["species_multilabel"] = targets
+            item["negative_mask"] = torch.from_numpy(replace)
+        else:
+            item["negative_mask"] = torch.zeros(item["audio"].shape[0], dtype=torch.bool)
+        return item

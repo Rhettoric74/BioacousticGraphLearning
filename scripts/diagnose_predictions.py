@@ -77,6 +77,8 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("graph_dir"); p.add_argument("checkpoint")
     p.add_argument("--birdset-path", required=True)
+    p.add_argument("--birdset-split", required=True,
+                   help="BirdSet split name matching the pickle, e.g. POW or HSN")
     p.add_argument("--perch-label-mapping", required=True)
     p.add_argument("--d-model", type=int, default=768); p.add_argument("--layers", type=int, default=1)
     p.add_argument("--heads", type=int, default=12); p.add_argument("--walks", type=int, default=1000)
@@ -99,7 +101,7 @@ def main():
 
     # Reuse the same mapping convention as train_graph_transformer.py.
     from birdset_preparation import load_birdset_data
-    split = load_birdset_data("POW")
+    split = load_birdset_data(args.birdset_split)
     codes = [split.features["ebird_code"]._int2str[i] for i in range(len(split.features["ebird_code"]._int2str))]
     model_codes = [mapping[str(i)] for i in range(len(mapping))]
     code_to_model = {code: i for i, code in enumerate(model_codes)}
@@ -107,7 +109,7 @@ def main():
     data = BirdSetDataset(args.birdset_path, subset_labels, num_species, args.sphere_scales)
     test_loader = DataLoader(data, 1024, shuffle=False)
     pow_logits, pow_targets = birdset_logits(model, test_loader, device, args.context_length)
-    report(f"POW context length {args.context_length}", pow_logits, pow_targets, names)
+    report(f"{args.birdset_split} context length {args.context_length}", pow_logits, pow_targets, names)
 
 
 if __name__ == "__main__": main()

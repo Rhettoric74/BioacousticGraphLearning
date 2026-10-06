@@ -4,6 +4,11 @@ import argparse
 import numpy as np
 import librosa
 
+PERCH_URL = (
+    "https://www.kaggle.com/models/google/"
+    "bird-vocalization-classifier/tensorFlow2/perch_v2/2"
+)
+
 
 def main():
     p = argparse.ArgumentParser()
@@ -19,8 +24,9 @@ def main():
     args = p.parse_args()
 
     from datasets import load_dataset
-    from perch_hoplite.zoo import model_configs
-    model = model_configs.load_model_by_name("perch_v2")
+    import tensorflow as tf
+    import tensorflow_hub as hub
+    model = hub.load(PERCH_URL)
     clip_samples = int(args.sample_rate * args.clip_seconds)
     excluded = {x.casefold() for x in args.exclude_label}
     embeddings, ids = [], []
@@ -52,14 +58,16 @@ def main():
             batch.append(waveform)
             batch_ids.append(f"{split}:{row.get('index', index)}")
             if len(batch) == args.batch_size:
-                out = np.stack([np.asarray(model.embed(w).embeddings) for w in batch]).astype(np.float32)
+                waveform_batch = tf.convert_to_tensor(np.stack(batch), dtype=tf.float32)
+                out = model.signatures["serving_default"](inputs=waveform_batch)["embedding"].numpy().astype(np.float32)
                 if out.ndim != 2 or len(out) != len(batch):
                     raise ValueError(f"Encoder returned {out.shape}; expected ({len(batch)}, D)")
                 embeddings.append(out); ids.extend(batch_ids); total += len(batch)
                 print(f"processed {total}", flush=True)
                 batch, batch_ids = [], []
         if batch:
-            out = np.stack([np.asarray(model.embed(w).embeddings) for w in batch]).astype(np.float32)
+            waveform_batch = tf.convert_to_tensor(np.stack(batch), dtype=tf.float32)
+            out = model.signatures["serving_default"](inputs=waveform_batch)["embedding"].numpy().astype(np.float32)
             if out.ndim != 2 or len(out) != len(batch):
                 raise ValueError(f"Encoder returned {out.shape}; expected ({len(batch)}, D)")
             embeddings.append(out); ids.extend(batch_ids); total += len(batch)

@@ -2,23 +2,15 @@
 """Plot sampled graph walks on a 3D Earth globe."""
 import argparse
 import numpy as np
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 
 from graph_transformer.data import GraphData, WalkDataset
-
-
-def xyz(coords):
-    lat = np.deg2rad(coords[:, 0])
-    lon = np.deg2rad(coords[:, 1])
-    return (np.cos(lat) * np.cos(lon),
-            np.cos(lat) * np.sin(lon),
-            np.sin(lat))
 
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("graph_dir")
-    p.add_argument("--output", default="graph_walks_globe.png")
+    p.add_argument("--output", default="graph_walks_globe.html")
     p.add_argument("--walks", type=int, default=25)
     p.add_argument("--walk-length", type=int, default=8)
     p.add_argument("--k", type=int, default=None,
@@ -46,27 +38,54 @@ def main():
     print("first sampled walk [lat, lon]:")
     print(sampled[0])
 
-    fig = plt.figure(figsize=(11, 9))
-    ax = fig.add_subplot(111, projection="3d")
-    u = np.linspace(0, 2 * np.pi, 80)
-    v = np.linspace(-np.pi / 2, np.pi / 2, 40)
-    sphere_x = np.outer(np.cos(u), np.cos(v))
-    sphere_y = np.outer(np.sin(u), np.cos(v))
-    sphere_z = np.outer(np.ones_like(u), np.sin(v))
-    ax.plot_surface(sphere_x, sphere_y, sphere_z, color="lightsteelblue", alpha=0.16, linewidth=0)
-
-    colors = plt.cm.tab20(np.linspace(0, 1, max(args.walks, 2)))
+    # Plotly's built-in Natural Earth rendering supplies land and coastlines,
+    # avoiding Cartopy/geopandas dependencies and local shapefile downloads.
+    fig = go.Figure()
+    colors = [
+        "#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e",
+        "#17becf", "#e377c2", "#8c564b", "#bcbd22", "#7f7f7f",
+    ]
     for i, coords in enumerate(sampled):
-        x, y, z = xyz(coords)
-        ax.plot(x, y, z, color=colors[i % len(colors)], alpha=0.75, linewidth=1.5)
-        ax.scatter(x, y, z, color=colors[i % len(colors)], s=14, alpha=0.9)
-        ax.scatter(x[0], y[0], z[0], color="black", s=28, depthshade=False)
+        color = colors[i % len(colors)]
+        fig.add_trace(go.Scattergeo(
+            lat=coords[:, 0], lon=coords[:, 1],
+            mode="lines+markers",
+            line=dict(color=color, width=2),
+            marker=dict(color=color, size=5),
+            name=f"walk {i}",
+            hovertemplate="walk %{text}<br>lat=%{lat:.4f}<br>lon=%{lon:.4f}<extra></extra>",
+            text=[str(i)] * len(coords),
+        ))
+        fig.add_trace(go.Scattergeo(
+            lat=[coords[0, 0]], lon=[coords[0, 1]],
+            mode="markers",
+            marker=dict(color="black", size=9, symbol="star"),
+            name=f"start {i}",
+            showlegend=False,
+            hovertemplate="start of walk %{text}<br>lat=%{lat:.4f}<br>lon=%{lon:.4f}<extra></extra>",
+            text=[str(i)],
+        ))
 
-    ax.set_title(f"{args.walks} sampled graph walks")
-    ax.set_box_aspect((1, 1, 1))
-    ax.set_axis_off()
-    fig.tight_layout()
-    fig.savefig(args.output, dpi=200)
+    fig.update_layout(
+        title=f"{args.walks} sampled graph walks",
+        geo=dict(
+            projection_type="orthographic",
+            showland=True,
+            landcolor="rgb(218, 225, 210)",
+            showocean=True,
+            oceancolor="rgb(205, 225, 245)",
+            showcountries=True,
+            countrycolor="rgba(80,80,80,0.45)",
+            showcoastlines=True,
+            coastlinecolor="rgb(50,50,50)",
+            coastlinewidth=1.0,
+            showlakes=True,
+            lakecolor="rgb(190, 220, 245)",
+         ),
+        margin=dict(l=0, r=0, t=45, b=0),
+        legend=dict(itemsizing="constant"),
+    )
+    fig.write_html(args.output, include_plotlyjs=True)
     print("saved", args.output)
 
 

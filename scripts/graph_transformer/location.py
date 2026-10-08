@@ -57,6 +57,9 @@ class GridCellSpatialRelationEncoder(nn.Module):
     def output_dim(self): return 4 * self.scales
 
     def forward(self, coords_deg: torch.Tensor) -> torch.Tensor:
+        print(coords_deg[:, 0].min(), coords_deg[:, 0].max())  # latitude
+        print(coords_deg[:, 1].min(), coords_deg[:, 1].max())  # longitude
+        raise Exception("Throwing exception to debug coordinates")
         xy = torch.deg2rad(coords_deg.to(dtype=torch.get_default_dtype()))
         out = []
         for s in range(self.scales):

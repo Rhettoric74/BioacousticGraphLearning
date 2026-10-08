@@ -7,7 +7,7 @@ The output directory contains:
     an ``audio_embedding_node_index`` mapping each embedding to its node
   - metadata.json: graph construction and feature-shape metadata
 
-By default, latitude and longitude are assumed to be columns 0 and 1 of
+By default, longitude and latitude are assumed to be columns 0 and 1 of
 ``spatiotemporal_contexts``. Singleton dimensions such as ``(N, 1, D)`` are
 handled automatically. Use --lat-index/--lon-index when that is not true.
 """
@@ -244,7 +244,7 @@ def load_mixup_nodes(input_dir: Path, num_classes: int):
             if i >= len(audio) or not np.isfinite(audio[i]).all() or not contexts[i]:
                 continue
             component_coords = np.asarray(
-                [np.asarray(component).reshape(-1)[:2] for component in contexts[i]],
+                [np.asarray(component).reshape(-1)[[1, 0]] for component in contexts[i]],
                 dtype=np.float32,
             )
             centroid = component_coords.mean(axis=0)
@@ -301,8 +301,8 @@ def main():
     p.add_argument("--mixup-dir", type=Path, default=None)
     p.add_argument("--num-classes", type=int, default=None)
     p.add_argument("--k", type=int, default=15, help="Number of outgoing geographic neighbours")
-    p.add_argument("--lat-index", type=int, default=0)
-    p.add_argument("--lon-index", type=int, default=1)
+    p.add_argument("--lat-index", type=int, default=1)
+    p.add_argument("--lon-index", type=int, default=0)
     p.add_argument("--context-decimals", type=int, default=6,
                    help="Decimal places retained for every context feature during deduplication")
     p.add_argument("--include-self", action="store_true")

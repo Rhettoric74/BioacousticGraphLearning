@@ -44,7 +44,9 @@ class BirdSetDataset(Dataset):
         raw_context = np.concatenate(context_parts, axis=0).astype(np.float32)
         if len(self.audio) != len(raw_labels) or len(self.audio) != len(raw_context):
             raise ValueError(f"BirdSet fields have inconsistent lengths in {path}")
-        coords = raw_context.reshape(len(raw_context), -1)[:, :2]
+        # BirdSet context stores [longitude, latitude]; normalize to
+        # [latitude, longitude] throughout this package.
+        coords = raw_context.reshape(len(raw_context), -1)[:, [1, 0]]
         self.coords = coords.astype(np.float32)
         with torch.no_grad():
             self.location = Sphere2VecSphereM(sphere_scales)(torch.from_numpy(coords)).numpy()

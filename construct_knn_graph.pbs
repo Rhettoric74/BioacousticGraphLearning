@@ -16,5 +16,10 @@ export PYTHONPATH=$PYTHONPATH:/home/svu/e1583377/hopper_pypkg/cuda/cuda_12.1.1-c
 cd scripts
 python3.10 build_xc_knn_graph.py \
     /scratch/e1583377/pickled_audio_embeds_3_random_windows_corrected \
-    /scratch/e1583377/deduplicated_xc_graph_k_equals_15 \
-    --k 15
+    /scratch/e1583377/deduplicated_xc_graph_k_equals_15_mixup_corrected \
+    --mixup-dir /scratch/e1583377/pickled_audio_embeds_mixedgeospatial_top_k_ \
+    --k 15 \
+    --lat-index 1 \
+    --lon-index 0 \
+    --query-batch-size 1024 \
+    --uncompressed

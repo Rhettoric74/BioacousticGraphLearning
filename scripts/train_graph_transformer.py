@@ -32,6 +32,9 @@ def main():
                    help="One or more context lengths for evaluation, e.g. --context-evaluation-length 8 4 2 1")
     p.add_argument("--species-location-mask-prob", type=float, default=0.0,
                    help="Probability of masking each location token during species training")
+    p.add_argument("--species-loss", choices=["asymmetric", "cross_entropy"],
+                   default="asymmetric",
+                   help="Species objective; cross_entropy uses equal-weight soft targets for multilabel samples")
     a = p.parse_args(); g = GraphData.load(a.graph_dir)
     ds = WalkDataset(g, a.walk_length, a.walks, a.p, a.q, a.mixup_probability, sphere_frequencies=a.sphere_scales)
     if a.negative_embeddings:
@@ -64,7 +67,8 @@ def main():
     trainer = Trainer(model, torch.optim.AdamW(model.parameters(), lr=a.lr), a.device,
                       (1., a.location_weight, a.audio_weight), val_loader,
                       a.checkpoint_dir, a.top_k, a.context_evaluation_length[0],
-                      a.species_location_mask_prob, a.checkpoint_metric)
+                      a.species_location_mask_prob, a.checkpoint_metric,
+                      a.species_loss)
     saved = trainer.fit(loader, a.epochs)
     if val_loader is not None and saved:
         from graph_transformer.birdset import evaluate_birdset, evaluate_birdset_context, evaluate_geolocation

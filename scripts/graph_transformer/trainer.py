@@ -9,7 +9,7 @@ class Trainer:
     def __init__(self, model, optimizer, device="cuda", weights=(1., .1, .1),
                  validation_loader=None, checkpoint_dir=None, top_k=3,
                  validation_context_length=1, species_location_mask_prob=0.0,
-                 checkpoint_metric="macro_auroc"):
+                 checkpoint_metric="macro_auroc", species_loss="asymmetric"):
         self.model, self.optimizer, self.device = model.to(device), optimizer, device
         self.weights = weights
         self.validation_loader = validation_loader
@@ -18,6 +18,7 @@ class Trainer:
         self.validation_context_length = validation_context_length
         self.species_location_mask_prob = species_location_mask_prob
         self.checkpoint_metric = checkpoint_metric
+        self.species_loss = species_loss
         self.last_checkpoint = None
         self.saved = []
         if self.checkpoint_dir: self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -33,7 +34,9 @@ class Trainer:
         )
         location_out = self.model(batch["audio"], batch["location"], batch["species"], mask_species=False, mask_location=True)
         audio_out = self.model(batch["audio"], batch["location"], batch["species"], mask_species=False, mask_audio=True)
-        species_loss = compute_losses(species_out, batch, 1., 0., 0.)["species"]
+        species_loss = compute_losses(
+            species_out, batch, 1., 0., 0., self.species_loss
+        )["species"]
         location_loss = compute_losses(location_out, batch, 0., 1., 0.)["location"]
         audio_loss = compute_losses(audio_out, batch, 0., 0., 1.)["audio"]
         losses = {"species": species_loss, "location": location_loss, "audio": audio_loss,

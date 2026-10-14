@@ -4,6 +4,30 @@ from torch import nn
 import torch.nn.functional as F
 
 
+class SinusoidalPositionalEncoding(nn.Module):
+    """Fixed sinusoidal positional encoding for flattened walk tokens."""
+
+    def __init__(self, max_length, d_model):
+        super().__init__()
+        positions = torch.arange(max_length, dtype=torch.float32).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2, dtype=torch.float32)
+            * (-torch.log(torch.tensor(10000.0)) / d_model)
+        )
+        encoding = torch.zeros(max_length, d_model, dtype=torch.float32)
+        encoding[:, 0::2] = torch.sin(positions * div_term)
+        encoding[:, 1::2] = torch.cos(positions * div_term[: encoding[:, 1::2].shape[1]])
+        self.register_buffer("encoding", encoding, persistent=True)
+
+    def forward(self, positions):
+        if positions.numel() and int(positions.max()) >= self.encoding.shape[0]:
+            raise ValueError(
+                f"Sequence position {int(positions.max())} exceeds the configured "
+                f"maximum position {self.encoding.shape[0] - 1}"
+            )
+        return self.encoding[positions]
+
+
 class GraphWalkTransformer(nn.Module):
     def __init__(self, audio_dim, location_dim, num_species, d_model=256, layers=4,
                  heads=8, dropout=.1, max_length=64):
@@ -19,7 +43,9 @@ class GraphWalkTransformer(nn.Module):
         )
         self.species = nn.Embedding(num_species, d_model)
         self.modality = nn.Embedding(3, d_model)
-        self.position = nn.Embedding(max_length * 3, d_model)
+        # Fixed encoding avoids learning a separate lookup vector for every
+        # token position and supports extrapolation to shorter sequences.
+        self.position = SinusoidalPositionalEncoding(max_length * 3, d_model)
         layer = nn.TransformerEncoderLayer(d_model, heads, 4 * d_model, dropout, batch_first=True, norm_first=True, activation="gelu")
         self.encoder = nn.TransformerEncoder(layer, layers)
         self.norm = nn.LayerNorm(d_model)

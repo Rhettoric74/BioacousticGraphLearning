@@ -52,6 +52,8 @@ def main():
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--weight-decay", type=float, default=1e-5)
     p.add_argument("--sphere-scales", type=int, default=32)
+    p.add_argument("--location-hidden-dim", type=int, default=512)
+    p.add_argument("--location-dropout", type=float, default=0.5)
     p.add_argument("--p", type=float, default=1.0); p.add_argument("--q", type=float, default=1.0)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     a = p.parse_args()
@@ -60,7 +62,11 @@ def main():
     walks = WalkDataset(graph, a.walk_length, a.walks, a.p, a.q, sphere_frequencies=a.sphere_scales)
     loader = DataLoader(walks, a.batch_size, shuffle=False, num_workers=0)
     num_classes = graph.multilabels.shape[1]
-    model = LinearAudioLocationClassifier(graph.audio.shape[-1], walks.loc_features.shape[-1], num_classes).to(a.device)
+    model = LinearAudioLocationClassifier(
+        graph.audio.shape[-1], walks.loc_features.shape[-1], num_classes,
+        location_hidden_dim=a.location_hidden_dim,
+        location_dropout=a.location_dropout,
+    ).to(a.device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=a.weight_decay)
     checkpoint_dir = Path(a.checkpoint_dir); checkpoint_dir.mkdir(parents=True, exist_ok=True)
 

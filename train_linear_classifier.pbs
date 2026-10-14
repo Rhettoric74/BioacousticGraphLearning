@@ -25,5 +25,6 @@ python3.10 scripts/train_linear_classifier.py "$graph_dir" \
   --perch-label-mapping "$perch_label_mapping" \
   --checkpoint-dir "$checkpoint_dir" \
   --epochs 20 --walks 100000 --walk-length 8 \
-  --batch-size 256 --lr 3e-4 --sphere-scales 32 --device cuda
+  --batch-size 256 --lr 3e-4 --sphere-scales 32 --device cuda \
+  --location-hidden-dim 512 --location-dropout 0.5
 EOF

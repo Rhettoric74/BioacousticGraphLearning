@@ -30,8 +30,11 @@ class SinusoidalPositionalEncoding(nn.Module):
 
 class GraphWalkTransformer(nn.Module):
     def __init__(self, audio_dim, location_dim, num_species, d_model=256, layers=4,
-                 heads=8, dropout=.1, max_length=64):
+                 heads=8, dropout=.1, max_length=64,
+                 species_logit_mode="linear", species_logit_scale=16.0):
         super().__init__()
+        if species_logit_mode not in {"linear", "cosine"}:
+            raise ValueError("species_logit_mode must be 'linear' or 'cosine'")
         self.audio = nn.Sequential(nn.LayerNorm(audio_dim), nn.Linear(audio_dim, d_model))
         self.location = nn.Sequential(
             nn.LayerNorm(location_dim),
@@ -42,6 +45,8 @@ class GraphWalkTransformer(nn.Module):
             nn.Dropout(0.5),
         )
         self.species = nn.Embedding(num_species, d_model)
+        self.species_logit_mode = species_logit_mode
+        self.species_logit_scale = float(species_logit_scale)
         self.modality = nn.Embedding(3, d_model)
         # Fixed encoding avoids learning a separate lookup vector for every
         # token position and supports extrapolation to shorter sequences.
@@ -82,7 +87,15 @@ class GraphWalkTransformer(nn.Module):
         latitude = torch.rad2deg(torch.asin(location_vector[..., 2].clamp(-1.0, 1.0)))
         longitude = torch.rad2deg(torch.atan2(location_vector[..., 1], location_vector[..., 0]))
         coordinates = torch.stack((latitude, longitude), dim=-1)
-        return {"species": self.species_head(x[:, :, 2]),
+        species_tokens = x[:, :, 2]
+        if self.species_logit_mode == "cosine":
+            species_logits = F.normalize(species_tokens, dim=-1) @ F.normalize(
+                self.species.weight, dim=-1
+            ).transpose(0, 1)
+            species_logits = species_logits * self.species_logit_scale
+        else:
+            species_logits = self.species_head(species_tokens)
+        return {"species": species_logits,
                 "coordinates": coordinates,
                 "location_vector": location_vector,
                 "audio": self.audio_head(x[:, :, 0]), "hidden": x}

@@ -32,6 +32,10 @@ def main():
                    help="One or more context lengths for evaluation, e.g. --context-evaluation-length 8 4 2 1")
     p.add_argument("--species-location-mask-prob", type=float, default=0.0,
                    help="Probability of masking each location token during species training")
+    p.add_argument("--species-logit-mode", choices=["linear", "cosine"], default="linear",
+                   help="Species classifier similarity: raw dot product or normalized cosine similarity")
+    p.add_argument("--species-logit-scale", type=float, default=16.0,
+                   help="Scale applied to cosine-similarity species logits")
     p.add_argument("--species-loss", choices=["asymmetric", "cross_entropy"],
                    default="asymmetric",
                    help="Species objective; cross_entropy uses equal-weight soft targets for multilabel samples")
@@ -43,7 +47,12 @@ def main():
         ds = NegativeAudioWalkDataset(ds, negative_audio, a.negative_replacement_probability)
     loader = DataLoader(ds, a.batch_size, shuffle=False, num_workers=0)
     num_species = g.multilabels.shape[1] if g.multilabels is not None else int(g.labels.max()) + 1
-    model = GraphWalkTransformer(g.audio.shape[-1], ds.loc_features.shape[-1], num_species, a.d_model, a.layers, a.heads, max_length=a.walk_length)
+    model = GraphWalkTransformer(
+        g.audio.shape[-1], ds.loc_features.shape[-1], num_species,
+        a.d_model, a.layers, a.heads, max_length=a.walk_length,
+        species_logit_mode=a.species_logit_mode,
+        species_logit_scale=a.species_logit_scale,
+    )
     val_loader = None; subset_labels = None
     if a.birdset_dir:
         with open(a.perch_label_mapping) as f:

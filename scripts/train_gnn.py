@@ -231,9 +231,40 @@ def _model_codes(path, num_classes):
         codes = mapping[:num_classes]
     else:
         raise ValueError("Perch mapping must be an index-keyed dictionary or ordered list")
-    if not all(isinstance(code, str) for code in codes) or len(set(codes)) != len(codes):
-        raise ValueError("Expected unique eBird code strings in model output-column order")
+    if not all(isinstance(code, str) for code in codes):
+        raise ValueError("Expected eBird code strings in model output-column order")
+    codes = [code.strip() for code in codes]
+    codes = [code for code in codes if code and code != "no_ebird_code"]
+    if len(set(codes)) != len(codes):
+        raise ValueError("Expected unique non-dummy eBird code strings in model output-column order")
     return codes
+
+
+def _compact_graph_classes(graph, path):
+    """Remove graph target columns whose Perch label is not an eBird species."""
+    mapping = json.loads(Path(path).read_text())
+    if isinstance(mapping, dict):
+        raw_codes = [mapping[str(i)] for i in range(graph.multilabels.shape[1])]
+    elif isinstance(mapping, list) and len(mapping) >= graph.multilabels.shape[1]:
+        raw_codes = mapping[:graph.multilabels.shape[1]]
+    else:
+        raise ValueError("Perch mapping must cover every graph target column")
+    keep = np.asarray([
+        isinstance(code, str) and code.strip() and code.strip() != "no_ebird_code"
+        for code in raw_codes
+    ], dtype=bool)
+    kept_codes = [str(code).strip() for code, use in zip(raw_codes, keep) if use]
+    if len(set(kept_codes)) != len(kept_codes):
+        raise ValueError("The non-dummy eBird codes are not unique in the mapping")
+    if not keep.all():
+        old_to_new = np.full(len(keep), -1, dtype=np.int64)
+        old_to_new[keep] = np.arange(keep.sum())
+        labels = graph.labels.copy()
+        valid = labels >= 0
+        labels[valid] = old_to_new[labels[valid]]
+        graph.labels = labels
+        graph.multilabels = graph.multilabels[:, keep]
+    return kept_codes, keep
 
 
 def _split_mapping(split, codes):
@@ -311,6 +342,9 @@ def main(argv=None):
         if (raw["labels"] < 0).any() and "multilabels" not in raw.files:
             raise ValueError("Scalar labels -1 need explicit multilabels in node_data.npz")
     g = GraphData.load(a.graph_dir)
+    compact_codes = None
+    if a.perch_label_mapping is not None:
+        compact_codes, _ = _compact_graph_classes(g, a.perch_label_mapping)
     if not g.num_nodes:
         raise ValueError("Training/reference graph is empty")
     if g.audio.ndim != 2 or g.multilabels.ndim != 2 or len(g.multilabels) != g.num_nodes:
@@ -356,11 +390,12 @@ def main(argv=None):
         if a.geolocation and checkpoint.get("weights", [1, 0, 0])[1] <= 0:
             raise ValueError("This checkpoint's location head was not trained")
     else:
-        codes = None
+        codes = compact_codes
         if a.birdset_dir is not None:
             if a.perch_label_mapping is None:
                 raise ValueError("--birdset-dir requires --perch-label-mapping, as in your sample scripts")
-            codes = _model_codes(a.perch_label_mapping, g.multilabels.shape[1])
+            if codes is None:
+                codes = _model_codes(a.perch_label_mapping, g.multilabels.shape[1])
         dim = g.audio.shape[1]
         model_config = dict(feature_dim=dim if a.audio_only else dim + location.shape[1],
                             audio_dim=dim, hidden_dim=a.d_model, num_classes=g.multilabels.shape[1],
